@@ -69,7 +69,7 @@ class CommonDataHandler(object):
 
         if len(flatten_token_ids) <= self.max_seq_len:
             flatten_token_ids = flatten_token_ids + [pad_id] * (self.max_seq_len - len(flatten_token_ids))
-            attention_mask_ids = attention_mask_ids + [0] * (self.max_seq_len - len(flatten_token_ids))
+            attention_mask_ids = attention_mask_ids + [0] * (self.max_seq_len - len(attention_mask_ids))
         else:
             flatten_token_ids = flatten_token_ids[:self.max_seq_len]
             attention_mask_ids = attention_mask_ids[:self.max_seq_len]

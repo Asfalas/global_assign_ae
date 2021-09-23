@@ -94,7 +94,7 @@ class EventGraphPropagationLayer(nn.Module):
             nn.Sigmoid()
         )
 
-    def graph_scorer(self, logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num)
+    def graph_scorer(self, logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num):
         role_evt_trans_matrix_list = torch.mm(logits.view(-1, self.role_num), self.WRT.view(self.role_num, -1))
 
         evt_logits = torch.zeros_like(evt_type_list.unsqueeze(-1).expand(-1, self.event_num)).scatter_(1, evt_type_list.unsqueeze(-1), 1)
@@ -138,7 +138,8 @@ class EventGraphPropagationLayer(nn.Module):
                 arg_len += 1
             if is_valid:
                 candidates = self.event_schema[self.event_list[et]]
-                pivot = 0, cand = 0
+                pivot = 0
+                cand = 0
                 while ps[pivot] == self.role_list.index(candidates[cand]):
                     pivot = int(random.random()) % arg_len
                     cand = int(random.random()) % len(candidates)

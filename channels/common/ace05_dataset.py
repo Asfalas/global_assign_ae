@@ -92,7 +92,6 @@ class ACE05DataHandler(CommonDataHandler):
             # put in output tensor
             sent_token_id_list.append(flatten_token_ids)
             attention_mask_id_list.append(attention_mask_ids)
-            print(len(flatten_token_ids), len(attention_mask_ids))
             arg_type_list.append(tmp_arg_types)
             arg_mask_list.append(tmp_arg_masks)
             arg_padding_mask_list.append(tmp_arg_padding_mask)
