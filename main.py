@@ -64,9 +64,9 @@ def main(args):
         dev_dataset = None
         test_dataset = CommonDataSet(args.dataset, ACE05DataHandler, conf.get("test_path"), conf, debug=args.debug)
     
-    model = SelfEnhancingGraphEAE(conf)
+    model = GlobalAssigner(conf)
 
-    model_processor = CommonModelProcessor(
+    model_processor = GlobalAssignerProcessor(
         model,
         train_dataset,
         dev_dataset,
