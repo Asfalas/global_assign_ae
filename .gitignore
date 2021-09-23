@@ -127,10 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
-<<<<<<< HEAD
-=======
 
-data/*.json
-data/*.jsonlines
-cache/*.tar
->>>>>>> 0ea4cf2 (upload)
+*train.json
+*test.json
+*dev.json
+*.jsonlines
+*.tar
