@@ -16,7 +16,7 @@
   "best_model_save_path": "cache/ace05/best.json",
   "best_model_config_path": "cache/ace05/best_config.json",
   "weight_decay": 0,
-  "batch_size": 32,
+  "batch_size": 4,
   "accumulate_step": 1,
   "lr_gamma": 0.9,
   "early_stop_threshold": 5,

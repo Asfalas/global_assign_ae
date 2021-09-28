@@ -13,11 +13,11 @@ from torch.utils.data.distributed import DistributedSampler
 from torch import nn
 from torch.optim import lr_scheduler
 
-class GlobalAssignerProcessor(Processor):
-    def __init__(self):
-        super(GlobalAssignerProcessor, self).__init__()
+class GlobalAssignerProcessor(CommonModelProcessor):
+    def __init__(self, model, train_dataset, dev_dataset, test_dataset, conf):
+        super(GlobalAssignerProcessor, self).__init__(model, train_dataset, dev_dataset, test_dataset, conf)
 
-    def setup(self, args):
+    def setup(self):
         total_params = self.model.parameters() if not self.use_gpu else self.model.module.parameters()
         self.optimizer = torch.optim.Adam(total_params, lr=self.lr)
         self.scheduler = lr_scheduler.ExponentialLR(self.optimizer, gamma=self.lr_gamma)

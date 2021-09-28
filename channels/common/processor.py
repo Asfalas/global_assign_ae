@@ -151,7 +151,6 @@ class CommonModelProcessor(object):
         # train
         while self.epoch < self.epochs:
             logging.info('  epoch: ' + str(self.epoch))
-            logging.info('  use seg? : ' + str(self.use_seg and self.conf.get('max_iter_num', 0)))
 
             self.model.train()
             # output lr info
@@ -167,8 +166,6 @@ class CommonModelProcessor(object):
                     label = label.cuda()
 
                 pred = self.model(inputs)
-                if isinstance(pred, tuple):
-                    pred = pred[0]
 
                 # loss calculation
                 loss = self.get_loss(pred, label)

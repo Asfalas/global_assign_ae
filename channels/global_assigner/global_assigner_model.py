@@ -45,7 +45,7 @@ class GlobalAssigner(nn.Module):
             nn.Linear(64, self.role_num)
         )
 
-        self.egp = EventGraphPropagationLayer(compressd_embed_dim, event_num, role_num, max_role_len, use_gpu, event_schema, role_list)
+        self.egp = EventGraphPropagationLayer(self.compressd_embed_dim, self.event_num, self.role_num, self.max_ent_len, self.use_gpu, self.event_schema, self.role_list)
         
     def forward(self, inputs):
         sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list = inputs
@@ -60,8 +60,8 @@ class GlobalAssigner(nn.Module):
         event_mention_embed = self.compress_embed_layer(event_mention_embed)
 
         # batch * max_role_len * merged_embed_dim
-        concated_embeds = torch.cat((arg_mention_embeds, event_mention_embed.expand(-1, self.max_role_len, -1)), dim=-1)
-        merged_arg_embeds = self.arg_event_concat_layer(concated_embed)
+        concated_embeds = torch.cat((arg_mention_embeds, event_mention_embed.expand(-1, self.max_ent_len, -1)), dim=-1)
+        merged_arg_embeds = self.arg_event_concat_layer(concated_embeds)
 
         role_logits = self.arg_classification_layer(merged_arg_embeds)
 
@@ -71,12 +71,12 @@ class GlobalAssigner(nn.Module):
 
 
 class EventGraphPropagationLayer(nn.Module):
-    def __init__(self, input_dim, event_num, role_num, max_role_len, use_gpu, event_schema, role_list):
+    def __init__(self, input_dim, event_num, role_num, max_ent_len, use_gpu, event_schema, role_list):
         super(EventGraphPropagationLayer, self).__init__()
         self.input_dim = input_dim
         self.role_num = role_num
         self.event_num = event_num
-        self.max_role_len = max_role_len
+        self.max_ent_len = max_ent_len
         self.use_gpu = use_gpu
         self.event_schema = event_schema
         self.role_list = role_list
@@ -87,7 +87,7 @@ class EventGraphPropagationLayer(nn.Module):
         self.WTT = nn.parameter.Parameter(torch.FloatTensor(event_num, input_dim, input_dim))
         nn.init.kaiming_uniform_(self.WTT, a=math.sqrt(5))
 
-        self.scorer = self.Sequential(
+        self.scorer = torch.nn.Sequential(
             nn.Linear(input_dim, 64),
             nn.ReLU(),
             nn.Linear(64, 1),
@@ -95,9 +95,13 @@ class EventGraphPropagationLayer(nn.Module):
         )
 
     def graph_scorer(self, logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num):
+        logits = logits.float()
         role_evt_trans_matrix_list = torch.mm(logits.view(-1, self.role_num), self.WRT.view(self.role_num, -1))
 
-        evt_logits = torch.zeros_like(evt_type_list.unsqueeze(-1).expand(-1, self.event_num)).scatter_(1, evt_type_list.unsqueeze(-1), 1)
+        evt_logits = torch.zeros_like(evt_type_list.unsqueeze(-1).expand(-1, self.event_num)).scatter(1, evt_type_list.unsqueeze(-1), 1).float()
+        if self.use_gpu:
+            evt_logits = evt_logits.cuda()
+
         evt_to_evt_matrix_list = torch.mm(evt_logits, self.WTT.view(self.event_num, -1)).view(-1, self.input_dim, self.input_dim)
         
         # propagation
@@ -105,20 +109,22 @@ class EventGraphPropagationLayer(nn.Module):
         evt_trans_evt_embedding = torch.bmm(evt_embeddings, evt_to_evt_matrix_list)
 
         # (b * max_role_len * input_dim) * (b * max_role_len * input_dim * input_dim) -> (b, self.max_role_len, input_dim)
-        role_trans_evt_embedding = torch.bmm(arg_embeddings.view(-1, 1, input_dim), role_evt_trans_matrix_list.view(-1, input_dim, input_dim))
-        role_trans_evt_embedding = role_trans_evt_embedding.view(-1, self.max_role_len, input_dim)
+        role_trans_evt_embedding = torch.bmm(arg_embeddings.view(-1, 1, self.input_dim), role_evt_trans_matrix_list.view(-1, self.input_dim, self.input_dim))
+        role_trans_evt_embedding = role_trans_evt_embedding.view(-1, self.max_ent_len, self.input_dim)
 
         # update
-        role_trans_evt_embedding *= arg_padding_num.unsqueeze(-1).expand(-1, -1, input_dim)
+        role_trans_evt_embedding *= arg_padding_num.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.input_dim)
         # # e1 = wt * e0 + avg(sum(wri * ai)) -> 1 * out
-        graph_embeddings = (torch.div(torch.sum(role_trans_evt_embedding, dim=1),
-                                        torch.sum(arg_padding_num, dim=1).unsqueeze(-1)) + evt_trans_evt_embedding.squeeze()) / 2.0
+
+        new_role_embeds_sum = torch.sum(role_trans_evt_embedding, dim=1)
+        arg_padding_sum = arg_padding_num.unsqueeze(-1)
+        div = torch.div(new_role_embeds_sum, arg_padding_sum)
+        graph_embeddings = (div + evt_trans_evt_embedding.squeeze()) / 2.0
         graph_score = self.scorer(graph_embeddings)
         return graph_score
 
     def forward(self, role_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num):
-        evt_type_list = evt_type_list.cpu().numpy()
-        arg_type_list = arg_type_list
+        evt_type_list_np = evt_type_list.cpu().numpy()
 
         # batch * max_role_len * role_num
         logits = role_logits.detach()
@@ -126,7 +132,7 @@ class EventGraphPropagationLayer(nn.Module):
         preds = torch.argmax(logits, dim=-1)
 
         # negtive sampler
-        for idx, (ps, ls, et) in enumerate(zip(preds, arg_type_list, event_type_list)):
+        for idx, (ps, ls, et) in enumerate(zip(preds, arg_type_list, evt_type_list_np)):
             is_valid = True
             arg_len = 0
             for p, l in zip(ps, ls):
@@ -145,13 +151,18 @@ class EventGraphPropagationLayer(nn.Module):
                     cand = int(random.random()) % len(candidates)
                 preds[idx][pivot] = self.role_list.index(candidates[cand])
 
-        pred_logits = torch.zeros_like(role_logits.view(-1, self.role_num)).scatter_(1, preds.view(-1), 1)
-        pred_logits = pred_logits.view(-1, self.max_role_len, self.role_num)
+        preds = preds.view(-1, 1)
+        pred_logits = torch.zeros_like(role_logits.view(-1, self.role_num)).scatter(1, preds, 1)
+        pred_logits = pred_logits.view(-1, self.max_ent_len, self.role_num)
         if self.use_gpu:
             pred_logits = pred_logits.cuda()
         pred_graph_score = self.graph_scorer(pred_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num)
 
-        golden_logits = torch.zeros_like(arg_type_list.view(-1).unsqueeze(-1).expand(-1, self.role_num)).scatter_(1, arg_type_list.view(-1), 1)
+        golden_logits = torch.zeros_like(arg_type_list.view(-1, 1).expand(-1, self.role_num)).scatter(1, arg_type_list.view(-1, 1), 1)
+        gloden_logits = golden_logits.view(-1, self.max_ent_len, self.role_num)
+        if self.use_gpu:
+            golden_logits = golden_logits.cuda()
         golden_graph_score = self.graph_scorer(golden_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num)
 
+        print(pred_graph_score, golden_graph_score)
         return pred_graph_score, golden_graph_score

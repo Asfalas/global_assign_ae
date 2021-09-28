@@ -19,6 +19,7 @@ class ACE05DataHandler(CommonDataHandler):
         arg_mask_list = []
         arg_type_list = []
         arg_padding_num_list = []
+        role_label_list = []
 
         arg_err = 0
         evt_err = 0
@@ -50,6 +51,7 @@ class ACE05DataHandler(CommonDataHandler):
             arg_mention_mask_template = [0.0] * self.max_seq_len
             tmp_arg_masks = []
             tmp_arg_types = []
+            tmp_arg_labels = []
             tmp_arg_padding_mask = []
 
             valid = True
@@ -78,10 +80,12 @@ class ACE05DataHandler(CommonDataHandler):
                 arg_type = arg['role']
                 # tmp_arg_types.append(self.event_schema[event_type].index(arg_type))
                 tmp_arg_types.append(self.role_list.index(arg_type))
+                tmp_arg_labels.append(self.role_list.index(arg_type))
                 tmp_arg_padding_mask.append([1] * self.max_role_len)
 
             for i in range(len(tmp_arg_types), self.max_ent_len):
-                tmp_arg_types += [-100]
+                tmp_arg_types += [0]
+                tmp_arg_labels += [-100]
                 tmp_arg_masks += copy.copy([arg_mention_mask_template])
                 tmp_arg_padding_mask += [[0] * self.max_role_len]
 
@@ -93,6 +97,7 @@ class ACE05DataHandler(CommonDataHandler):
             sent_token_id_list.append(flatten_token_ids)
             attention_mask_id_list.append(attention_mask_ids)
             arg_type_list.append(tmp_arg_types)
+            role_label_list.append(tmp_arg_labels)
             arg_mask_list.append(tmp_arg_masks)
             arg_padding_mask_list.append(tmp_arg_padding_mask)
             padding_list = [1.0 if i < len(event_info['args']) else 0.0 for i in range(self.max_ent_len)]
@@ -104,6 +109,7 @@ class ACE05DataHandler(CommonDataHandler):
         sent_token_id_list = torch.LongTensor(sent_token_id_list)
         attention_mask_id_list = torch.LongTensor(attention_mask_id_list)
         arg_type_list = torch.LongTensor(arg_type_list)
+        role_label_list = torch.LongTensor(role_label_list)
         arg_mask_list = torch.FloatTensor(arg_mask_list)
         arg_padding_mask_list = torch.FloatTensor(arg_padding_mask_list)
         arg_padding_num_list = torch.FloatTensor(arg_padding_num_list)
@@ -117,4 +123,4 @@ class ACE05DataHandler(CommonDataHandler):
         if arg_err:
             logging.info("  论元越界: " + str(arg_err))
         
-        return sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list
+        return sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list, role_label_list

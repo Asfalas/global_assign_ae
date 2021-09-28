@@ -23,10 +23,12 @@ class CommonDataSet(Dataset):
 class CommonDataHandler(object):
     def __init__(self, path, conf, debug=0):
         self.path = path
-        self.data = json.load(open(path))
         logging.info('  debug 模式:' + ("True" if debug else "False"))
         if debug:
-            self.data = self.data[:200]
+            paths = path.split('/')
+            paths[-1] = 'debug_' + paths[-1]
+            self.path = '/'.join(paths)
+        self.data = json.load(open(self.path))
         self.event_schema = conf.get('event_schema', {})
         self.event_list = conf.get('event_list', [])
         self.role_list = conf.get('role_list', [])

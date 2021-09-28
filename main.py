@@ -6,10 +6,10 @@ import torch
 
 from channels.common.utils import *
 from channels.common.const import *
-from channels.ace05.ace05_dataset import ACE05DataHandler
+from channels.common.ace05_dataset import ACE05DataHandler
 from channels.common.dataset import CommonDataSet
-from channels.common.global_assigner_model import *
-from channels.common.global_assigner_processor import *
+from channels.global_assigner.global_assigner_model import *
+from channels.global_assigner.global_assigner_processor import *
 from channels.common.processor import CommonModelProcessor
 
 logging.basicConfig(level=logging.INFO)
