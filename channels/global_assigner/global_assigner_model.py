@@ -45,9 +45,9 @@ class GlobalAssigner(nn.Module):
             nn.Linear(64, self.role_num)
         )
 
-        self.egp = EventGraphPropagationLayer(self.compressd_embed_dim, self.event_num, self.role_num, self.max_ent_len, self.use_gpu, self.event_schema, self.role_list)
+        self.egp = EventGraphPropagationLayer(self.compressd_embed_dim, self.event_num, self.role_num, self.max_ent_len, self.use_gpu, self.event_schema, self.role_list, self.event_list)
         
-    def forward(self, inputs):
+    def forward(self, inputs, is_predict=False):
         sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list = inputs
         sent_embeds = self.bert(input_ids=sent_token_id_list)[0]
 
@@ -65,13 +65,17 @@ class GlobalAssigner(nn.Module):
 
         role_logits = self.arg_classification_layer(merged_arg_embeds)
 
-        pred_score, golden_score = self.egp(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_type_list, arg_padding_num_list)
+        if not is_predict:
+            pred_score, golden_score = self.egp(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_type_list, arg_padding_num_list)
 
-        return role_logits
+            return role_logits, pred_score, golden_score
+        
+        pred = self.egp.predict(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_padding_num_list)
+        return pred
 
 
 class EventGraphPropagationLayer(nn.Module):
-    def __init__(self, input_dim, event_num, role_num, max_ent_len, use_gpu, event_schema, role_list):
+    def __init__(self, input_dim, event_num, role_num, max_ent_len, use_gpu, event_schema, role_list, event_list):
         super(EventGraphPropagationLayer, self).__init__()
         self.input_dim = input_dim
         self.role_num = role_num
@@ -80,6 +84,7 @@ class EventGraphPropagationLayer(nn.Module):
         self.use_gpu = use_gpu
         self.event_schema = event_schema
         self.role_list = role_list
+        self.event_list = event_list
 
         self.WRT = nn.parameter.Parameter(torch.FloatTensor(role_num, input_dim, input_dim))
         nn.init.kaiming_uniform_(self.WRT, a=math.sqrt(5))
@@ -94,7 +99,7 @@ class EventGraphPropagationLayer(nn.Module):
             nn.Sigmoid()
         )
 
-    def graph_scorer(self, logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num):
+    def graph_scorer(self, logits, evt_embeddings, arg_embeddings, evt_type_list, arg_padding_num):
         logits = logits.float()
         role_evt_trans_matrix_list = torch.mm(logits.view(-1, self.role_num), self.WRT.view(self.role_num, -1))
 
@@ -109,7 +114,7 @@ class EventGraphPropagationLayer(nn.Module):
         evt_trans_evt_embedding = torch.bmm(evt_embeddings, evt_to_evt_matrix_list)
 
         # (b * max_role_len * input_dim) * (b * max_role_len * input_dim * input_dim) -> (b, self.max_role_len, input_dim)
-        role_trans_evt_embedding = torch.bmm(arg_embeddings.view(-1, 1, self.input_dim), role_evt_trans_matrix_list.view(-1, self.input_dim, self.input_dim))
+        role_trans_evt_embedding = torch.bmm(arg_embeddings.reshape(-1, 1, self.input_dim), role_evt_trans_matrix_list.view(-1, self.input_dim, self.input_dim))
         role_trans_evt_embedding = role_trans_evt_embedding.view(-1, self.max_ent_len, self.input_dim)
 
         # update
@@ -144,11 +149,11 @@ class EventGraphPropagationLayer(nn.Module):
                 arg_len += 1
             if is_valid:
                 candidates = self.event_schema[self.event_list[et]]
-                pivot = 0
-                cand = 0
+                pivot = int(random.random() % 100 * arg_len) % arg_len
+                cand = int(random.random() % 100 * len(candidates)) % len(candidates)
                 while ps[pivot] == self.role_list.index(candidates[cand]):
-                    pivot = int(random.random()) % arg_len
-                    cand = int(random.random()) % len(candidates)
+                    pivot = int(random.random() * 100 * arg_len) % arg_len
+                    cand = int(random.random() * 100 * len(candidates)) % len(candidates)
                 preds[idx][pivot] = self.role_list.index(candidates[cand])
 
         preds = preds.view(-1, 1)
@@ -156,13 +161,63 @@ class EventGraphPropagationLayer(nn.Module):
         pred_logits = pred_logits.view(-1, self.max_ent_len, self.role_num)
         if self.use_gpu:
             pred_logits = pred_logits.cuda()
-        pred_graph_score = self.graph_scorer(pred_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num)
+        pred_graph_score = self.graph_scorer(pred_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_padding_num)
 
         golden_logits = torch.zeros_like(arg_type_list.view(-1, 1).expand(-1, self.role_num)).scatter(1, arg_type_list.view(-1, 1), 1)
         gloden_logits = golden_logits.view(-1, self.max_ent_len, self.role_num)
         if self.use_gpu:
             golden_logits = golden_logits.cuda()
-        golden_graph_score = self.graph_scorer(golden_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_type_list, arg_padding_num)
+        golden_graph_score = self.graph_scorer(golden_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_padding_num)
 
-        print(pred_graph_score, golden_graph_score)
         return pred_graph_score, golden_graph_score
+
+    def predict(self, role_logits, evt_embeddings, arg_embeddings, evt_type_list, arg_padding_num):
+        # batch * max_role_len * role_num
+        logits = role_logits.detach()
+        logits = torch.log_softmax(logits, dim=-1)
+        labels = torch.argmax(logits, dim=-1)
+
+        result = []
+        for i, (batch_logit, batch_label, batch_evt_types, batch_padding_num) in enumerate(zip(logits, labels, evt_type_list, arg_padding_num)):
+            cand_labels = [batch_label.clone().numpy()]
+            evt_types = [batch_evt_types.clone() for i in range(self.max_ent_len + 1)]
+            padding_nums = [batch_padding_num.clone() for i in range(self.max_ent_len + 1)]
+            for j, (logit, pred) in enumerate(zip(batch_logit, batch_label)):
+                max_idx = torch.argmax(logit, dim=-1).numpy()
+                max_val = torch.max(logit, dim=-1).values.numpy()
+                second_idx = 0
+                second_val = 0
+                for k, val in enumerate(logit):
+                    if k == max_idx:
+                        continue
+                    if val > second_val and val < max_val:
+                        second_val = val
+                        second_idx = k
+                tmp_labels = batch_label.clone()
+                tmp_labels[j] = second_idx
+                cand_labels.append(tmp_labels.numpy())
+            cand_labels = torch.LongTensor(cand_labels)
+            evt_types = torch.LongTensor(evt_types)
+            padding_nums = torch.FloatTensor(padding_nums)
+            if self.use_gpu:
+                cand_labels = cand_labels.cuda()
+                evt_types = evt_types.cuda()
+                padding_nums = padding_nums.cuda()
+            
+            preds = cand_labels.view(-1, 1)
+            pred_logits = torch.zeros_like(preds.view(-1, 1).expand(-1, self.role_num)).scatter(1, preds, 1)
+            pred_logits = pred_logits.view(-1, self.max_ent_len, self.role_num)
+            if self.use_gpu:
+                pred_logits = pred_logits.cuda()
+            tmp_evt_embeddings = evt_embeddings[i].clone().unsqueeze(0).expand(self.max_ent_len+1, -1, -1)
+            tmp_arg_embeddings = arg_embeddings[i].clone().unsqueeze(0).expand(self.max_ent_len+1, -1, -1)
+            pred_graph_score = self.graph_scorer(pred_logits, tmp_evt_embeddings, tmp_arg_embeddings, evt_types, padding_nums)
+            pred_graph_score = pred_graph_score.view(-1)
+            res = torch.argmax(pred_graph_score)
+            result.append(cand_labels[res].cpu().numpy())
+
+        result = torch.LongTensor(result)
+        if self.use_gpu:
+            result = result.cuda()
+
+        return result
