@@ -18,8 +18,17 @@ class GlobalAssignerProcessor(CommonModelProcessor):
         super(GlobalAssignerProcessor, self).__init__(model, train_dataset, dev_dataset, test_dataset, conf)
 
     def setup(self):
+        bert_params = self.model.bert.parameters() if not self.use_gpu else self.model.module.bert.parameters()
         total_params = self.model.parameters() if not self.use_gpu else self.model.module.parameters()
-        self.optimizer = torch.optim.Adam(total_params, lr=self.lr)
+
+        extra_params = list(map(id, bert_params))
+        base_params = filter(lambda p: id(p) not in extra_params, total_params)
+        self.optimizer = torch.optim.Adam(
+            [   
+                {'params': base_params, 'lr': self.lr},
+                {'params': bert_params, 'lr': self.bert_lr}
+            ]
+        )
         self.scheduler = lr_scheduler.ExponentialLR(self.optimizer, gamma=self.lr_gamma)
         self.loss_function = nn.CrossEntropyLoss()
         self.margin_loss_function = nn.MarginRankingLoss()
@@ -40,9 +49,9 @@ class GlobalAssignerProcessor(CommonModelProcessor):
         return loss
 
     def get_loss(self, pred, pred_scores, golden_scores, label):
-        loss1 = self.get_margin_loss(pred_scores, golden_scores)
+        # loss1 = self.get_margin_loss(pred_scores, golden_scores)
         loss2 = self.get_classify_loss(pred, label)
-        return loss1 + loss2
+        return loss2
 
     def train(self, checkpoint=None):
         logging.info('  开始训练')
@@ -73,10 +82,12 @@ class GlobalAssignerProcessor(CommonModelProcessor):
                     inputs = tuple(x.cuda() for x in inputs)
                     label = label.cuda()
 
-                pred, pred_scores, golden_scores = self.model(inputs)
+                # pred, pred_scores, golden_scores = self.model(inputs)
+                pred = self.model(inputs)
 
                 # loss calculation
-                loss = self.get_loss(pred, pred_scores, golden_scores, label)
+                # loss = self.get_loss(pred, pred_scores, golden_scores, label)
+                loss = self.get_loss(pred, None, None, label)
 
                 loss.backward()
                 
@@ -89,7 +100,6 @@ class GlobalAssignerProcessor(CommonModelProcessor):
                 y_pred, y_true = self.get_result(pred, label, input_data)
                 precision, recall, f1, metric = self.get_metric(y_pred, y_true)
                 bar.set_description(f"step:{step}: pre:{round(precision, 3)} loss:{loss}")
-                break
 
             # adjust learning rate
             self.scheduler.step()
@@ -106,40 +116,39 @@ class GlobalAssignerProcessor(CommonModelProcessor):
             if self.early_stop > self.early_stop_threshold:
                 break
             self.epoch += 1
-            self.post_epoch(self.epoch)
 
         logging.info('  训练结束!\n')
         return True
 
-    def eval(self, model, data_loader, mode='dev', ignore_index=-100):
-        with torch.no_grad():
-            model.eval()
-            bar = tqdm(list(enumerate(data_loader)))
-            ground_truth = []
-            pred_label = []
-            pred_results = []
-            for step, input_data in bar:
-                # inputs = tuple(x.to(self.device) for x in input_data[:-1])
-                inputs = input_data[:-1]
-                label = input_data[-1]
-                if self.use_gpu:
-                    inputs = tuple(x.cuda() for x in inputs)
+    # def eval(self, model, data_loader, mode='dev', ignore_index=-100):
+    #     with torch.no_grad():
+    #         model.eval()
+    #         bar = tqdm(list(enumerate(data_loader)))
+    #         ground_truth = []
+    #         pred_label = []
+    #         pred_results = []
+    #         for step, input_data in bar:
+    #             # inputs = tuple(x.to(self.device) for x in input_data[:-1])
+    #             inputs = input_data[:-1]
+    #             label = input_data[-1]
+    #             if self.use_gpu:
+    #                 inputs = tuple(x.cuda() for x in inputs)
 
-                pred = model(inputs, is_predict=True)
-                label = label.view(-1)
-                pred = pred.view(-1)
-                y_pred, y_true = [], []
-                for idx, (p, l) in enumerate(zip(pred, label)):
-                    if l == ignore_index:
-                        continue
-                    y_pred.append(p)
-                    y_true.append(l)
-                ground_truth += y_true
-                pred_label += y_pred
-                pred_results.append(y_pred)
-            precision, recall, f1, metric = self.get_metric(pred_label, ground_truth)
-            logging.info(f"{mode}:{self.epoch}: pre:{round(precision, 3)} rec:{round(recall, 3)} f1:{round(f1, 3)}")
-        return metric, pred_results
+    #             pred = model(inputs, is_predict=True)
+    #             label = label.view(-1).cpu().numpy()
+    #             pred = pred.view(-1).cpu().numpy()
+    #             y_pred, y_true = [], []
+    #             for idx, (p, l) in enumerate(zip(pred, label)):
+    #                 if l == ignore_index:
+    #                     continue
+    #                 y_pred.append(p)
+    #                 y_true.append(l)
+    #             ground_truth += y_true
+    #             pred_label += y_pred
+    #             pred_results.append(y_pred)
+    #         precision, recall, f1, metric = self.get_metric(pred_label, ground_truth)
+    #         logging.info(f"{mode}:{self.epoch}: pre:{round(precision, 3)} rec:{round(recall, 3)} f1:{round(f1, 3)}")
+    #     return metric, pred_results
 
     def test(self, dataset=None, checkpoint=None):
         logging.info('  测试开始')

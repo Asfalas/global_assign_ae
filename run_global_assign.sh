@@ -1,6 +1,6 @@
-CUDA_VISIBLE_DEVICES=0 python -u main.py \
+CUDA_VISIBLE_DEVICES=0,1 python -u main.py \
     --mode train \
-    --debug 1 \
+    --debug 0 \
     --dataset ace05 \
     --conf conf/ace05/config.json \
-    --use_cpu 1
+    --use_cpu 0

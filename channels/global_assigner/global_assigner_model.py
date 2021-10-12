@@ -18,6 +18,7 @@ class GlobalAssigner(nn.Module):
         self.max_role_len = conf.get('max_role_len', 16)
         self.max_ent_len = conf.get('max_ent_len', 28)
         self.event_num = conf.get('evt_num', 34)
+        self.evt_type_embed_dim = conf.get('evt_type_embed_dim', 8)
         self.seg_hidden_dim = conf.get('seg_hidden_dim', 300)
         self.pretrained_model_name = conf.get('pretrained_model_name', 'bert-base-uncased')
         self.use_gpu = conf.get('use_gpu', False)
@@ -29,13 +30,15 @@ class GlobalAssigner(nn.Module):
 
         self.bert = BertModel.from_pretrained(self.pretrained_model_name)
 
-        self.compress_embed_layer = nn.Sequential(
-            nn.Linear(self.embed_dim, self.compressd_embed_dim),
-            nn.ReLU()
-        )
+        # self.compress_embed_layer = nn.Sequential(
+        #     nn.Linear(self.embed_dim, self.compressd_embed_dim),
+        #     nn.ReLU()
+        # )
+        self.evt_type_embedd_layer = nn.Embedding(self.event_num, self.evt_type_embed_dim)
 
         self.arg_event_concat_layer = nn.Sequential(
-            nn.Linear(self.compressd_embed_dim * 2, self.merged_embed_dim),
+            nn.Linear(self.embed_dim * 2 + self.evt_type_embed_dim, self.merged_embed_dim),
+            # nn.Linear(self.embed_dim + self.evt_type_embed_dim, self.merged_embed_dim),
             nn.ReLU()
         )
 
@@ -45,33 +48,37 @@ class GlobalAssigner(nn.Module):
             nn.Linear(64, self.role_num)
         )
 
-        self.egp = EventGraphPropagationLayer(self.compressd_embed_dim, self.event_num, self.role_num, self.max_ent_len, self.use_gpu, self.event_schema, self.role_list, self.event_list)
+        self.egp = EventGraphPropagationLayer(self.embed_dim, self.event_num, self.role_num, self.max_ent_len, self.use_gpu, self.event_schema, self.role_list, self.event_list)
         
     def forward(self, inputs, is_predict=False):
-        sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list = inputs
-        sent_embeds = self.bert(input_ids=sent_token_id_list)[0]
+        sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list = inputs
+        sent_embeds = self.bert(input_ids=sent_token_id_list, attention_mask=attention_mask_id_list)[0]
+
+        evt_type_embeddings = self.evt_type_embedd_layer(evt_type_list)
 
         # batch * max_role_len * 768
         arg_mention_embeds = torch.bmm(arg_mask_list, sent_embeds)
-        arg_mention_embeds = self.compress_embed_layer(arg_mention_embeds)
+        # arg_mention_embeds = self.compress_embed_layer(arg_mention_embeds)
         
         # batch * 1 * 768
         event_mention_embed = torch.bmm(evt_mention_mask_list, sent_embeds)
-        event_mention_embed = self.compress_embed_layer(event_mention_embed)
+        # event_mention_embed = self.compress_embed_layer(event_mention_embed)
 
         # batch * max_role_len * merged_embed_dim
         concated_embeds = torch.cat((arg_mention_embeds, event_mention_embed.expand(-1, self.max_ent_len, -1)), dim=-1)
+        concated_embeds = torch.cat((concated_embeds, evt_type_embeddings.unsqueeze(1).expand(-1, self.max_ent_len, -1)), dim=-1)
         merged_arg_embeds = self.arg_event_concat_layer(concated_embeds)
 
         role_logits = self.arg_classification_layer(merged_arg_embeds)
 
-        if not is_predict:
-            pred_score, golden_score = self.egp(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_type_list, arg_padding_num_list)
 
-            return role_logits, pred_score, golden_score
+        # if not is_predict:
+            # pred_score, golden_score = self.egp(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_type_list, arg_padding_num_list)
+            # return role_logits, pred_score, golden_score
         
-        pred = self.egp.predict(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_padding_num_list)
-        return pred
+        # pred = self.egp.predict(role_logits, event_mention_embed, arg_mention_embeds, evt_type_list, arg_padding_num_list)
+        # return pred
+        return role_logits
 
 
 class EventGraphPropagationLayer(nn.Module):
@@ -132,7 +139,7 @@ class EventGraphPropagationLayer(nn.Module):
         evt_type_list_np = evt_type_list.cpu().numpy()
 
         # batch * max_role_len * role_num
-        logits = role_logits.detach()
+        logits = role_logits.clone().detach()
         logits = torch.log_softmax(logits, dim=-1)
         preds = torch.argmax(logits, dim=-1)
 
@@ -179,12 +186,12 @@ class EventGraphPropagationLayer(nn.Module):
 
         result = []
         for i, (batch_logit, batch_label, batch_evt_types, batch_padding_num) in enumerate(zip(logits, labels, evt_type_list, arg_padding_num)):
-            cand_labels = [batch_label.clone().numpy()]
-            evt_types = [batch_evt_types.clone() for i in range(self.max_ent_len + 1)]
-            padding_nums = [batch_padding_num.clone() for i in range(self.max_ent_len + 1)]
+            cand_labels = [batch_label.clone().cpu().numpy()]
+            evt_types = [batch_evt_types.clone().cpu() for i in range(self.max_ent_len + 1)]
+            padding_nums = [batch_padding_num.clone().cpu() for i in range(self.max_ent_len + 1)]
             for j, (logit, pred) in enumerate(zip(batch_logit, batch_label)):
-                max_idx = torch.argmax(logit, dim=-1).numpy()
-                max_val = torch.max(logit, dim=-1).values.numpy()
+                max_idx = torch.argmax(logit, dim=-1).cpu().numpy()
+                max_val = torch.max(logit, dim=-1).values.cpu().numpy()
                 second_idx = 0
                 second_val = 0
                 for k, val in enumerate(logit):
@@ -195,7 +202,7 @@ class EventGraphPropagationLayer(nn.Module):
                         second_idx = k
                 tmp_labels = batch_label.clone()
                 tmp_labels[j] = second_idx
-                cand_labels.append(tmp_labels.numpy())
+                cand_labels.append(tmp_labels.cpu().numpy())
             cand_labels = torch.LongTensor(cand_labels)
             evt_types = torch.LongTensor(evt_types)
             padding_nums = torch.FloatTensor(padding_nums)

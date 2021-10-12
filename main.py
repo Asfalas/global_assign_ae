@@ -66,6 +66,8 @@ def main(args):
     
     model = GlobalAssigner(conf)
 
+    # model_processor = CommonModelProcessor(
+
     model_processor = GlobalAssignerProcessor(
         model,
         train_dataset,

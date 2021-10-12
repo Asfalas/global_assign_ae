@@ -4,6 +4,7 @@ import time
 import torch
 import json
 import logging
+import random
 
 from tqdm import tqdm
 from channels.common.const import *
@@ -20,12 +21,16 @@ class CommonModelProcessor(object):
             model = nn.DataParallel(model)
             model = model.cuda()
         self.model = model
-        self.lr = conf.get('lr', 5e-5)
+        self.lr = conf.get('lr', 1e-3)
+        self.bert_lr = conf.get("bert_lr", 1e-5)
         self.epochs = conf.get('epochs', 20)
         self.max_role_len = conf.get('max_role_len', 16)
         self.model_save_path = conf.get('model_save_path', 'cache/ace05/{metric}_{epoch}.tar')
         self.best_model_save_path = conf.get('best_model_save_path', 'cache/ace05/best.json')
         self.best_model_config_path = conf.get('best_model_config_path', 'cache/ace05/best_config.json')
+
+        self.role_list = conf.get("role_list", [])
+        self.role_num = len(self.role_list)
 
         if conf.get('pretrain', 0):
             self.model_save_path = conf.get('pretrain_model_save_path', 'cache/ace05/{metric}_{epoch}_pretrain.tar')
@@ -51,26 +56,30 @@ class CommonModelProcessor(object):
         setup_seed(seed)
 
     def setup(self):
-        if not self.conf.get('pretrain', 0):
-            logging.info('  加载预训练模型参数')
-            self.load_model(self.conf.get('pretrain_best_model_save_path', 'cache/ace05/best_config_pretrain.json'))
-            logging.info('  锁定预训练部分参数(encoder, classifier)')
-            classifier_params = self.model.init_classifier.parameters() if not self.use_gpu else self.model.module.init_classifier.parameters()
-            encoder_params = self.model.encoder.parameters() if not self.use_gpu else self.model.module.encoder.parameters()
-            for i in classifier_params:
-                i.requires_grad = False
-            for i in encoder_params:
-                i.requires_grad = False
-            self.conf['max_iter_num'] = 1    
-        else:
-            logging.info('  锁定bert参数')
-            bert_params = self.model.encoder.bert.parameters() if not self.use_gpu else self.model.module.encoder.bert.parameters()
-            for i in bert_params:
-                i.requires_grad = False
+        # if not self.conf.get('pretrain', 0):
+        #     logging.info('  加载预训练模型参数')
+        #     self.load_model(self.conf.get('pretrain_best_model_save_path', 'cache/ace05/best_config_pretrain.json'))
+        #     logging.info('  锁定预训练部分参数(encoder, classifier)')
+        #     classifier_params = self.model.init_classifier.parameters() if not self.use_gpu else self.model.module.init_classifier.parameters()
+        #     encoder_params = self.model.encoder.parameters() if not self.use_gpu else self.model.module.encoder.parameters()
+        #     for i in classifier_params:
+        #         i.requires_grad = False
+        #     for i in encoder_params:
+        #         i.requires_grad = False
+        #     self.conf['max_iter_num'] = 1    
+        # else:
+            # logging.info('  锁定bert参数')
+            # bert_params = self.model.encoder.bert.parameters() if not self.use_gpu else self.model.module.encoder.bert.parameters()
+            # for i in bert_params:
+            #     i.requires_grad = False
+        logging.info('  锁定bert参数')
+        bert_params = self.model.bert.parameters() if not self.use_gpu else self.model.module.bert.parameters()
+        for i in bert_params:
+            i.requires_grad = False
         total_params = self.model.parameters() if not self.use_gpu else self.model.module.parameters()
         self.optimizer = torch.optim.Adam(total_params, lr=self.lr)
         self.scheduler = lr_scheduler.ExponentialLR(self.optimizer, gamma=self.lr_gamma)
-        self.loss_function = nn.CrossEntropyLoss()
+        self.loss_function = nn.CrossEntropyLoss(ignore_index=-100, size_average=True)
     
     def post_epoch(self, epoch):
         if not self.conf.get('pretrain', 0):
@@ -91,7 +100,7 @@ class CommonModelProcessor(object):
             self.model.load_state_dict(checkpoint_info['model_state_dict'])
 
     def get_loss(self, pred, label):
-        label = label.view(-1, 1).squeeze()
+        label = label.view(-1)
         pred = pred.view(label.size()[0], -1)
         loss = self.loss_function(pred, label)
         return loss
@@ -102,7 +111,7 @@ class CommonModelProcessor(object):
         self.optimizer.zero_grad()
 
     def get_metric(self, y_pred, y_true, average='micro'):
-        labels = [i for i in range(1, self.max_role_len)]
+        labels = [i for i in range(1, self.role_num)]
         precision, recall, f1 = calc_metrics(y_true, y_pred, labels, average=average)
         metric = f1
         return precision, recall, f1, metric
@@ -110,8 +119,9 @@ class CommonModelProcessor(object):
     def get_result(self, pred, label, input_data, ignore_index=-100):
         label = label.view(-1, 1).squeeze()
         pred = pred.view(label.size()[0], -1)
-        proba = torch.log_softmax(pred, dim=1)
-        pred_cls = torch.argmax(proba, dim=1)
+
+        proba = torch.softmax(pred, dim=-1)
+        pred_cls = torch.argmax(proba, dim=-1)
 
         label = label.cpu().view(-1).numpy()
         pred_cls = pred_cls.cpu().view(-1).numpy()
@@ -173,12 +183,15 @@ class CommonModelProcessor(object):
                 loss.backward()
                 
                 # params optimization
-                if ((step + 1) % self.accumulate_step) == self.accumulate_step - 1 or step == len(
-                        train_data_loader) - 1:
-                    self.optimize()
+                # if ((step + 1) % self.accumulate_step) == self.accumulate_step - 1 or step == len(
+                #         train_data_loader) - 1:
+                self.optimize()
 
                 # calc metric info
                 y_pred, y_true = self.get_result(pred, label, input_data)
+                if random.random() < 0.1:
+                    for i, j in zip(y_pred, y_true):
+                        print(i, j)
                 precision, recall, f1, metric = self.get_metric(y_pred, y_true)
                 bar.set_description(f"step:{step}: pre:{round(precision, 3)} loss:{loss}")
 
@@ -197,7 +210,7 @@ class CommonModelProcessor(object):
             if self.early_stop > self.early_stop_threshold:
                 break
             self.epoch += 1
-            self.post_epoch(self.epoch)
+            # self.post_epoch(self.epoch)
 
         logging.info('  训练结束!\n')
         return True

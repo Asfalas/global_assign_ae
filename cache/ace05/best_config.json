@@ -6,8 +6,8 @@
   "embed_dim": 768,
   "merged_mention_dim": 500,
   "pretrained_model_name": "bert-base-uncased",
-  "lr": 5e-3,
-  "bert_lr": 1e-5,
+  "lr": 0.005,
+  "bert_lr": 1e-05,
   "epochs": 30,
   "model_save_path": "cache/ace05/{metric}_{epoch}.tar",
   "best_model_save_path": "cache/ace05/best.json",
@@ -431,5 +431,7 @@
     "Time-Holds",
     "Time-Before",
     "Vehicle"
-  ]
+  ],
+  "use_gpu": true,
+  "pretrain": 0
 }
