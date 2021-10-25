@@ -26,6 +26,9 @@ parser.add_argument('--pretrain', type=int, default=0)
 parser.add_argument('--epochs', type=int, default=0)
 parser.add_argument('--batch_size', type=int, default=0)
 parser.add_argument('--accumulate_step', type=int, default=0)
+parser.add_argument('--lr', type=float, default=0)
+parser.add_argument('--train_bert', type=int, default=0)
+parser.add_argument('--checkpoint', type=str, default=None)
 
 args = parser.parse_args()
 
@@ -49,6 +52,12 @@ def main(args):
         conf['batch_size'] = args.batch_size
     if args.accumulate_step:
         conf['accumulate_step'] = args.accumulate_step
+    if args.lr:
+        conf["lr"] = args.lr
+    if args.train_bert:
+        conf["train_bert"] = args.train_bert
+    if args.checkpoint:
+        conf["checkpoint"] = args.checkpoint
     
     mode = args.mode
     if mode == 'train':
@@ -57,9 +66,9 @@ def main(args):
         dev_dataset = CommonDataSet(args.dataset, ACE05DataHandler, conf.get("dev_path"), conf, debug=args.debug)
     else:
         if args.pretrain:
-            conf = json.load(open(conf.get('pretrain_best_model_config_path', 'cache/ace05/best_pretrain_config.json')))
+            conf.update(json.load(open(conf.get('pretrain_best_model_config_path', 'cache/ace05/best_pretrain_config.json'))))
         else:
-            conf = json.load(open(conf.get('best_model_config_path', "cache/ace05/best_config.json")))
+            conf.update(json.load(open(conf.get('best_model_config_path', "cache/ace05/best_config.json"))))
         train_dataset = None
         dev_dataset = None
         test_dataset = CommonDataSet(args.dataset, ACE05DataHandler, conf.get("test_path"), conf, debug=args.debug)
@@ -80,7 +89,6 @@ def main(args):
         model_processor.train()
         model_processor.test()
     else:
-        model_processor.batch_size = 1
         model_processor.test()
     return
 

@@ -19,12 +19,15 @@ class ACE05DataHandler(CommonDataHandler):
         arg_mask_list = []
         arg_type_list = []
         arg_padding_num_list = []
+        arg_padding_mask_list = []
         role_label_list = []
 
         arg_err = 0
         evt_err = 0
         empty_arg_err = 0
         arg_num_err = 0
+        all_none = 0
+        not_all_none = 0
         n = 0
         t = 0
         
@@ -34,6 +37,7 @@ class ACE05DataHandler(CommonDataHandler):
             event_type = event_info['evt_type']
 
             # calc event offsets
+            # print(tokens, flatten_token_ids)
             tmp_evt_offset = self.get_flatten_offsets(token_offsets, [event_info['evt_beg'], event_info['evt_end']])
             valid = True
             for offset in tmp_evt_offset:
@@ -55,6 +59,7 @@ class ACE05DataHandler(CommonDataHandler):
             tmp_arg_masks = []
             tmp_arg_types = []
             tmp_arg_labels = []
+            tmp_arg_padding_mask = []
 
             valid = True
             if len(event_info.get('args', [])) == 0:
@@ -63,6 +68,8 @@ class ACE05DataHandler(CommonDataHandler):
 
             none_args = []
             not_padding_arg_num = 0
+
+            is_all_none = True
             for arg in event_info['args']:
                 offsets = [arg['arg_beg'], arg['arg_end']]
                 new_offsets = self.get_flatten_offsets(token_offsets, offsets)
@@ -87,17 +94,20 @@ class ACE05DataHandler(CommonDataHandler):
                     none_args.append(tmp_offsets)
                     continue
                 t += 1
+                is_all_none = False
                 not_padding_arg_num += 1
                 # tmp_arg_types.append(self.event_schema[event_type].index(arg_type))
                 tmp_arg_types.append(self.role_list.index(arg_type))
                 tmp_arg_labels.append(self.role_list.index(arg_type))
                 tmp_arg_masks.append(tmp_offsets)
+                tmp_arg_padding_mask.append(1)
             
             if len(tmp_arg_types) > self.max_ent_len:
                 arg_num_err += 1
                 tmp_arg_types = tmp_arg_types[:self.max_ent_len]
                 tmp_arg_labels = tmp_arg_labels[:self.max_ent_len]
                 tmp_arg_masks = tmp_arg_masks[:self.max_ent_len]
+                tmp_arg_padding_mask = tmp_arg_padding_mask[:self.max_ent_len]
 
             random.shuffle(none_args)
             none_args = none_args[:self.max_ent_len - len(tmp_arg_types)]
@@ -106,13 +116,20 @@ class ACE05DataHandler(CommonDataHandler):
                 tmp_arg_types.append(0)
                 tmp_arg_labels.append(0)
                 tmp_arg_masks.append(n_arg)
+                tmp_arg_padding_mask.append(1)
                 not_padding_arg_num += 1
 
             for i in range(len(tmp_arg_types), self.max_ent_len):
                 tmp_arg_types += [0]
                 tmp_arg_labels += [-100]
                 tmp_arg_masks += copy.copy([arg_mention_mask_template])
+                tmp_arg_padding_mask.append(0)
             
+            if is_all_none:
+                all_none += 1
+            else:
+                not_all_none += 1
+
             # event type mask
             tmp_event_type_mask = [0] * self.evt_num
             tmp_event_type_mask[self.event_list.index(event_type)] = 1
@@ -124,6 +141,7 @@ class ACE05DataHandler(CommonDataHandler):
             role_label_list.append(tmp_arg_labels)
             arg_mask_list.append(tmp_arg_masks)
             arg_padding_num_list.append(not_padding_arg_num)
+            arg_padding_mask_list.append(tmp_arg_padding_mask)
             evt_mention_mask_list.append([copy.copy(tmp_evt_mask)])
             evt_type_list.append(self.event_list.index(event_type))
 
@@ -133,6 +151,7 @@ class ACE05DataHandler(CommonDataHandler):
         arg_type_list = torch.LongTensor(arg_type_list)
         role_label_list = torch.LongTensor(role_label_list)
         arg_mask_list = torch.FloatTensor(arg_mask_list)
+        arg_padding_mask_list = torch.FloatTensor(arg_padding_mask_list)
         arg_padding_num_list = torch.FloatTensor(arg_padding_num_list)
         evt_type_list = torch.LongTensor(evt_type_list)
         evt_mention_mask_list = torch.FloatTensor(evt_mention_mask_list)
@@ -146,5 +165,7 @@ class ACE05DataHandler(CommonDataHandler):
         if arg_num_err:
             logging.info("  论元数目越界: " + str(arg_num_err))
         print(n, t)
+
+        logging.info("  全none: {}, 非全none: {}".format(str(all_none), str(not_all_none)))
         
-        return sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_num_list, arg_mask_list, arg_type_list, role_label_list
+        return sent_token_id_list, attention_mask_id_list, evt_type_list, evt_mention_mask_list, arg_padding_num_list, arg_padding_mask_list, arg_mask_list, arg_type_list, role_label_list
